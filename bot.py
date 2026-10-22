@@ -1,5 +1,6 @@
-import logging, asyncio, uuid
+import logging, asyncio, uuid, io
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply,
     InlineQueryResultArticle, InputTextMessageContent,
@@ -9,6 +10,12 @@ from telegram.ext import (
     ChatMemberHandler, InlineQueryHandler, filters, ContextTypes,
 )
 from telegram.constants import ChatMemberStatus, ParseMode
+
+# Imports para o PDF
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.lib.units import inch
 
 from config import *
 from database import *
@@ -52,6 +59,44 @@ async def get_ctx_user(update):
     tg = update.effective_user
     row = await get_or_create_user(tg)
     return tg, row
+
+# ---------- GERAR PDF ----------
+def generate_pdf(user_id, username, nome, total_ganho, indicacoes):
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    
+    # Cabeçalho
+    p.setFont("Helvetica-Bold", 24)
+    p.drawString(1 * inch, 10 * inch, "Bellamy Store")
+    p.setFont("Helvetica", 12)
+    p.drawString(1 * inch, 9.6 * inch, "Relatório de Afiliados")
+    
+    # Dados do Usuário
+    p.setFont("Helvetica-Bold", 14)
+    p.drawString(1 * inch, 8.8 * inch, "Dados do Afiliado:")
+    p.setFont("Helvetica", 12)
+    p.drawString(1 * inch, 8.4 * inch, f"ID: {user_id}")
+    p.drawString(1 * inch, 8.1 * inch, f"Username: @{username if username else 'N/A'}")
+    p.drawString(1 * inch, 7.8 * inch, f"Nome: {nome}")
+    
+    # Data/Hora Brasília
+    dt_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    p.drawString(1 * inch, 7.2 * inch, f"Data do Relatório: {dt_br.strftime('%d/%m/%Y às %H:%M')} (Brasília)")
+    
+    # Resumo Financeiro
+    p.setFont("Helvetica-Bold", 14)
+    p.drawString(1 * inch, 6.4 * inch, "Resumo Financeiro:")
+    p.setFont("Helvetica", 12)
+    p.drawString(1 * inch, 6.0 * inch, f"Total de Indicações: {indicacoes}")
+    p.drawString(1 * inch, 5.7 * inch, f"Total Ganho Acumulado: R$ {fmt_brl(total_ganho)}")
+    
+    p.setFont("Helvetica-Oblique", 10)
+    p.drawString(1 * inch, 1 * inch, "Este documento é gerado automaticamente pelo sistema Bellamy Store.")
+    
+    p.showPage()
+    p.save()
+    buffer.seek(0)
+    return buffer
 
 # ---------- START / BLOQUEIO / BOAS-VINDAS ----------
 async def send_block(update, context):
@@ -367,7 +412,6 @@ async def show_profile(update, context):
         [await btn("profile_edit", cb="prof:edit")],
         [await btn("back", cb="nav:welcome")],
     ]
-    # disable_web_page_preview=True remove o HTML laranja do whatsapp
     await update.callback_query.edit_message_text(
         text, 
         reply_markup=InlineKeyboardMarkup(rows), 
@@ -378,17 +422,24 @@ async def show_profile(update, context):
 async def show_history(update, context, page=0, active_only=True):
     _, u = await get_ctx_user(update)
     total = await count_user_purchases(u[0], active_only=active_only)
+    
     if total == 0:
-        key = "history_empty_active" if active_only else "history_empty_all"
-        text = await get_text(key)
-        rows = []
         if active_only:
-            allc = await count_user_purchases(u[0], active_only=False)
-            if allc > 0:
-                rows.append([await btn("history_all", cb="prof:history:all:0")])
+            all_count = await count_user_purchases(u[0], active_only=False)
+            if all_count > 0:
+                text = await get_text("history_empty_active")
+                rows = [
+                    [await btn("history_all", cb="prof:history:all:0")],
+                    [await btn("back", cb="nav:profile")]
+                ]
+            else:
+                text = await get_text("history_empty_all")
+                rows = [[await btn("back", cb="nav:profile")]]
         else:
-            rows.append([await btn("history_active", cb="prof:history:active:0")])
-        rows.append([await btn("back", cb="nav:profile")])
+            text = await get_text("history_empty_all")
+            rows = [[await btn("history_active", cb="prof:history:active:0")],
+                    [await btn("back", cb="nav:profile")]]
+            
         return await update.callback_query.edit_message_text(
             text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
@@ -411,10 +462,12 @@ async def show_history(update, context, page=0, active_only=True):
         nav.append(InlineKeyboardButton("➡️", callback_data=f"prof:history:next:{page+1}:{int(active_only)}"))
     if nav:
         rows.append(nav)
+        
     if active_only:
         rows.append([await btn("history_all", cb="prof:history:all:0")])
     else:
         rows.append([await btn("history_active", cb="prof:history:active:0")])
+        
     rows.append([await btn("back", cb="nav:profile")])
     await update.callback_query.edit_message_text(
         text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
@@ -477,7 +530,6 @@ async def handle_whatsapp(update, context):
     
     digits = "".join(ch for ch in v if ch.isdigit())
     if len(digits) < 10 or len(digits) > 13:
-        # Mantém o await_wa True para ele tentar de novo, e usa reply_to_message_id para puxar a msg
         return await update.message.reply_text(await get_text("edit_whatsapp_invalid"), reply_to_message_id=update.message.message_id)
     
     await set_whatsapp(u[0], digits)
@@ -523,7 +575,6 @@ async def start_pix(update, context, uid, value, type_, product_id=None, qty=1, 
     await add_pix(ref, uid, value, type_, code, product_id, qty)
     text = await txt("pix_qr", valor=await fmt_brl(value), id_recarga=ref, codigo_pix=code)
     
-    # Botão "Copiar Pix" usa o copy_text nativo
     rows = [
         [InlineKeyboardButton(await get_btn("pix_wait"), callback_data=f"pix:check:{ref}")],
         [InlineKeyboardButton(await get_btn("pix_copy"), copy_text=code)],
@@ -639,6 +690,13 @@ async def callback_router(update, context):
     q = update.callback_query
     data = q.data or ""
     await q.answer()
+    
+    # LIMPA O ESTADO DE INPUT A CADA CLIQUE DE BOTÃO (Resolve o bug do Gift na recarga)
+    context.user_data.pop("await_gift", None)
+    context.user_data.pop("await_wa", None)
+    context.user_data.pop("await_recharge", None)
+    context.user_data.pop("qty_pid", None)
+
     try:
         if data == "noop":
             return
@@ -720,9 +778,41 @@ async def callback_router(update, context):
             await set_affiliate_status(uid, "active")
             return await show_affiliates(update, context)
         if data == "aff:pdf":
-            return await q.answer("📄 PDF será gerado na versão final com ReportLab.", show_alert=True)
+            # GERA O PDF REAL
+            uid = update.effective_user.id
+            u = await get_user(uid)
+            a = await get_affiliate(uid)
+            total_ganho = a[3]
+            indicacoes = await count_referrals(uid)
+            
+            pdf_buf = generate_pdf(uid, u[2], u[1], total_ganho, indicacoes)
+            await q.message.reply_document(
+                document=pdf_buf,
+                filename=f"afiliados_{uid}.pdf",
+                caption="📄 <b>Aqui está o seu relatório de afiliados!</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return await q.answer("PDF gerado com sucesso!")
+            
         if data == "aff:points":
-            return await q.answer("Em breve.", show_alert=True)
+            # TROCA DE PONTOS POR SALDO REAL
+            uid = update.effective_user.id
+            a = await get_affiliate(uid)
+            total_ganho = a[3]
+            
+            if total_ganho <= 0:
+                return await q.answer("❌ Você não possui comissões acumuladas para trocar.", show_alert=True)
+            
+            # Adiciona o valor de comissão ao saldo do usuário
+            await add_saldo(uid, total_ganho)
+            # Zera a comissão acumulada
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                await db.execute("UPDATE affiliates SET total_earned=0 WHERE user_id=?", (uid,))
+                await db.commit()
+                
+            await q.answer(f"✅ R$ {await fmt_brl(total_ganho)} transferidos para o seu saldo!", show_alert=True)
+            return await show_affiliates(update, context)
+
         if data == "multi:next":
             d = context.user_data["multi"]
             d["idx"] += 1
@@ -818,7 +908,6 @@ def main():
     app.job_queue.run_repeating(job_abandoned, interval=60, first=30)
     app.job_queue.run_repeating(job_pix_check, interval=60, first=30)
 
-    # WEBHOOK CONFIGURADO
     if WEBHOOK_URL:
         app.run_webhook(
             listen="0.0.0.0", 
