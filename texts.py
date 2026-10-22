@@ -106,7 +106,7 @@ TEXTS = {
 "- 👤 <b>Informações:</b>\n"
 "🆔 ID da Carteira: {id}\n"
 "💰 Saldo Atual: R$ {saldo}\n"
-"📲 Seu Whatsapp: <b><a href=\"wa.me/55{whatsapp}\">{whatsapp}</a></b>\n\n"
+"📲 Seu Whatsapp: <b><a href=\"https://wa.me/55{whatsapp}\">{whatsapp}</a></b>\n\n"
 "─── 📊 <b>Suas Movimentações:</b>\n"
 "ー 🛒 Compras Realizadas: {compras}\n"
 "ー 💰 Total Gasto Em Compras: R$ {total_gasto}\n"
