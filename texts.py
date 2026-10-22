@@ -209,7 +209,7 @@ TEXTS = {
 "🏆 <b>TOP {titulo}</b>\n\n{lista}"
 ),
 
-"channel_sale": (
+"group_sale": (
 "💰 <b>VENDA APROVADA!</b>\n\n"
 "👤 Cliente: {nome}***\n"
 "📦 {produto}\n"
@@ -293,8 +293,8 @@ DEFAULT_BUTTONS = {
     "top_gift": "Gift card",
     "top_comprar": "Comprar",
 
-    "channel_ver_compras": "🔗 Ver Compras",
-    "channel_comprar": "🛒 Comprar também",
+    "group_ver_compras": "🔗 Ver Compras",
+    "group_comprar": "🛒 Comprar também",
     "abandon_buy": "🛒 Comprar Agora",
     "abandon_view": "👀 Ver Detalhes",
 }
