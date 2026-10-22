@@ -1,5 +1,5 @@
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import DATABASE_PATH
 from texts import TEXTS, DEFAULT_BUTTONS
 
@@ -66,12 +66,10 @@ CREATE TABLE IF NOT EXISTS transactions (
 async def init_db():
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.executescript(SCHEMA)
-        # seed messages/buttons
         for k, v in TEXTS.items():
             await db.execute("INSERT OR IGNORE INTO messages(key,value) VALUES(?,?)", (k, v))
         for k, v in DEFAULT_BUTTONS.items():
             await db.execute("INSERT OR IGNORE INTO buttons(key,label) VALUES(?,?)", (k, v))
-        # seed demo category/product only if empty
         cur = await db.execute("SELECT COUNT(*) FROM categories")
         row = await cur.fetchone()
         if row[0] == 0:
@@ -144,7 +142,9 @@ async def get_categories():
 
 async def get_products_by_cat(cat_id, page=0, per_page=6):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute("SELECT * FROM products WHERE category_id=? AND active=1 ORDER BY position LIMIT ? OFFSET ?", (cat_id, per_page, page*per_page))
+        cur = await db.execute(
+            "SELECT * FROM products WHERE category_id=? AND active=1 ORDER BY position LIMIT ? OFFSET ?",
+            (cat_id, per_page, page*per_page))
         return await cur.fetchall()
 
 async def count_products_by_cat(cat_id):
@@ -170,18 +170,15 @@ async def decrement_stock(pid, qty=1):
 
 async def search_products(text):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute("SELECT * FROM products WHERE active=1 AND name LIKE ? LIMIT 20", (f"%{text}%",))
+        cur = await db.execute(
+            "SELECT * FROM products WHERE active=1 AND name LIKE ? LIMIT 20",
+            (f"%{text}%",))
         return await cur.fetchall()
 
 # ---------- purchases ----------
 async def add_purchase(uid, pid, price, email, senha, link, days=30):
     now = datetime.utcnow()
-    exp = now.replace(year=now.year+1)  # fallback
-    try:
-        from datetime import timedelta
-        exp = now + timedelta(days=days)
-    except Exception:
-        pass
+    exp = now + timedelta(days=days)
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute(
             "INSERT INTO purchases(user_id,product_id,price,email,password,link,created_at,expires_at,active) VALUES(?,?,?,?,?,?,?,?,1)",
@@ -231,17 +228,17 @@ async def user_stats(uid):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute("SELECT COUNT(*), COALESCE(SUM(price),0) FROM purchases WHERE user_id=?", (uid,))
         compras, total = await cur.fetchone()
-        cur = await db.execute("SELECT COALESCE(SUM(value),0) FROM pix WHERE user_id=? AND status='paid' AND type='recharge'", (uid,))
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(value),0) FROM pix WHERE user_id=? AND status='paid' AND type='recharge'", (uid,))
         pix = (await cur.fetchone())[0]
-        cur = await db.execute("SELECT COALESCE(SUM(value),0) FROM gifts WHERE used_by=? AND used=1", (uid,))
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(value),0) FROM gifts WHERE used_by=? AND used=1", (uid,))
         gifts = (await cur.fetchone())[0]
         return {"compras": compras, "total_gasto": total, "pix": pix, "gifts": gifts}
 
 # ---------- pix ----------
 async def add_pix(ref, uid, value, type_, code, product_id=None, qty=1, minutes=10):
     now = datetime.utcnow()
-    exp = now.replace(microsecond=0)
-    from datetime import timedelta
     exp = now + timedelta(minutes=minutes)
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
@@ -261,7 +258,6 @@ async def set_pix_status(ref, status):
         await db.commit()
 
 async def pending_pix_older_than(minutes):
-    from datetime import timedelta
     lim = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute("SELECT * FROM pix WHERE status='pending' AND created_at < ?", (lim,))
@@ -269,7 +265,9 @@ async def pending_pix_older_than(minutes):
 
 async def expired_pix():
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        cur = await db.execute("SELECT * FROM pix WHERE status='pending' AND expires_at < ?", (datetime.utcnow().isoformat(),))
+        cur = await db.execute(
+            "SELECT * FROM pix WHERE status='pending' AND expires_at < ?",
+            (datetime.utcnow().isoformat(),))
         return await cur.fetchall()
 
 # ---------- gifts ----------
@@ -280,7 +278,9 @@ async def get_gift(code):
 
 async def use_gift(code, uid):
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("UPDATE gifts SET used=1, used_by=?, used_at=? WHERE code=?", (uid, datetime.utcnow().isoformat(), code))
+        await db.execute(
+            "UPDATE gifts SET used=1, used_by=?, used_at=? WHERE code=?",
+            (uid, datetime.utcnow().isoformat(), code))
         await db.commit()
 
 # ---------- affiliates ----------
@@ -288,7 +288,8 @@ async def get_affiliate(uid):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute("SELECT * FROM affiliates WHERE user_id=?", (uid,))
         row = await cur.fetchone()
-        if row: return row
+        if row:
+            return row
         await db.execute("INSERT INTO affiliates(user_id) VALUES(?)", (uid,))
         await db.commit()
         cur = await db.execute("SELECT * FROM affiliates WHERE user_id=?", (uid,))
@@ -344,12 +345,10 @@ async def track_abandoned(uid, pid, type_='cart', value=0):
         await db.execute("DELETE FROM abandoned WHERE user_id=? AND type=? AND notified=0", (uid, type_))
         await db.execute(
             "INSERT INTO abandoned(user_id,product_id,type,value,created_at,notified) VALUES(?,?,?,?,?,0)",
-            (uid, pid, type_, value, datetime.utcnow().isoformat())
-        )
+            (uid, pid, type_, value, datetime.utcnow().isoformat()))
         await db.commit()
 
 async def abandoned_to_notify(minutes=15):
-    from datetime import timedelta
     lim = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute("SELECT * FROM abandoned WHERE notified=0 AND created_at < ?", (lim,))
