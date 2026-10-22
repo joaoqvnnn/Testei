@@ -1,4 +1,4 @@
-import logging, asyncio, uuid, io
+import logging, asyncio, uuid, io, aiosqlite
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from telegram import (
@@ -65,13 +65,11 @@ def generate_pdf(user_id, username, nome, total_ganho, indicacoes):
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=letter)
     
-    # Cabeçalho
     p.setFont("Helvetica-Bold", 24)
     p.drawString(1 * inch, 10 * inch, "Bellamy Store")
     p.setFont("Helvetica", 12)
     p.drawString(1 * inch, 9.6 * inch, "Relatório de Afiliados")
     
-    # Dados do Usuário
     p.setFont("Helvetica-Bold", 14)
     p.drawString(1 * inch, 8.8 * inch, "Dados do Afiliado:")
     p.setFont("Helvetica", 12)
@@ -79,11 +77,9 @@ def generate_pdf(user_id, username, nome, total_ganho, indicacoes):
     p.drawString(1 * inch, 8.1 * inch, f"Username: @{username if username else 'N/A'}")
     p.drawString(1 * inch, 7.8 * inch, f"Nome: {nome}")
     
-    # Data/Hora Brasília
     dt_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
     p.drawString(1 * inch, 7.2 * inch, f"Data do Relatório: {dt_br.strftime('%d/%m/%Y às %H:%M')} (Brasília)")
     
-    # Resumo Financeiro
     p.setFont("Helvetica-Bold", 14)
     p.drawString(1 * inch, 6.4 * inch, "Resumo Financeiro:")
     p.setFont("Helvetica", 12)
@@ -569,6 +565,10 @@ async def handle_recharge_value(update, context):
 async def start_pix(update, context, uid, value, type_, product_id=None, qty=1, chat_id=None):
     chat_id = chat_id or update.effective_chat.id
     await context.bot.send_message(chat_id, await get_text("pix_generating"))
+    
+    # DELAY DE 3 SEGUNDOS AQUI
+    await asyncio.sleep(3) 
+    
     pix = await payments.create_pix(uid, value)
     ref = pix["ref"]
     code = pix["code"]
@@ -691,7 +691,7 @@ async def callback_router(update, context):
     data = q.data or ""
     await q.answer()
     
-    # LIMPA O ESTADO DE INPUT A CADA CLIQUE DE BOTÃO (Resolve o bug do Gift na recarga)
+    # LIMPA O ESTADO DE INPUT A CADA CLIQUE DE BOTÃO
     context.user_data.pop("await_gift", None)
     context.user_data.pop("await_wa", None)
     context.user_data.pop("await_recharge", None)
@@ -778,7 +778,6 @@ async def callback_router(update, context):
             await set_affiliate_status(uid, "active")
             return await show_affiliates(update, context)
         if data == "aff:pdf":
-            # GERA O PDF REAL
             uid = update.effective_user.id
             u = await get_user(uid)
             a = await get_affiliate(uid)
@@ -795,7 +794,6 @@ async def callback_router(update, context):
             return await q.answer("PDF gerado com sucesso!")
             
         if data == "aff:points":
-            # TROCA DE PONTOS POR SALDO REAL
             uid = update.effective_user.id
             a = await get_affiliate(uid)
             total_ganho = a[3]
@@ -803,9 +801,7 @@ async def callback_router(update, context):
             if total_ganho <= 0:
                 return await q.answer("❌ Você não possui comissões acumuladas para trocar.", show_alert=True)
             
-            # Adiciona o valor de comissão ao saldo do usuário
             await add_saldo(uid, total_ganho)
-            # Zera a comissão acumulada
             async with aiosqlite.connect(DATABASE_PATH) as db:
                 await db.execute("UPDATE affiliates SET total_earned=0 WHERE user_id=?", (uid,))
                 await db.commit()
