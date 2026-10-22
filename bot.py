@@ -111,6 +111,7 @@ async def cmd_debug(update, context):
     lines.append(f"SUPPORT_URL: <code>{repr(SUPPORT_URL)}</code>")
     lines.append(f"BOT_USERNAME: <code>{repr(BOT_USERNAME)}</code>")
     lines.append(f"STORE_URL: <code>{repr(STORE_URL)}</code>")
+    lines.append(f"WEBHOOK_URL: <code>{repr(WEBHOOK_URL)}</code>")
     try:
         me = await context.bot.get_me()
         lines.append(f"Bot: @{me.username} (id {me.id})")
@@ -804,10 +805,13 @@ def main():
     app.job_queue.run_repeating(job_abandoned, interval=60, first=30)
     app.job_queue.run_repeating(job_pix_check, interval=60, first=30)
 
+    # AQUI FOI A CORREÇÃO DO WEBHOOK (Trocado de BOT_TOKEN para "webhook")
     if WEBHOOK_URL:
         app.run_webhook(
-            listen="0.0.0.0", port=PORT, url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            listen="0.0.0.0", 
+            port=PORT, 
+            url_path="webhook",
+            webhook_url=f"{WEBHOOK_URL}/webhook",
         )
     else:
         app.run_polling()
