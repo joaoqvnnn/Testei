@@ -28,9 +28,11 @@ async def txt(key, **kw):
 
 async def btn(key, cb=None, url=None, sw=None):
     label = await get_btn(key)
-    if url:   return InlineKeyboardButton(label, url=url)
-    if sw:    return InlineKeyboardButton(label, switch_inline_query_current_chat=sw)
-    return InlineKeyboardButton(label, callback_data=cb)
+    if url:
+        return InlineKeyboardButton(label, url=url)
+    if sw:
+        return InlineKeyboardButton(label, switch_inline_query_current_chat=sw)
+    return InlineKeyboardButton(label, callback_data=cb or "noop")
 
 async def is_member(bot, uid):
     if not GROUP_ID:
@@ -100,6 +102,33 @@ async def cmd_start(update, context):
         return await show_product(update, context, pid, send_new=True)
 
     await send_welcome(update, context)
+
+async def cmd_debug(update, context):
+    tg = update.effective_user
+    lines = [f"👤 Seu ID: <code>{tg.id}</code>"]
+    lines.append(f"GROUP_ID: <code>{repr(GROUP_ID)}</code>")
+    lines.append(f"GROUP_URL: <code>{repr(GROUP_URL)}</code>")
+    lines.append(f"SUPPORT_URL: <code>{repr(SUPPORT_URL)}</code>")
+    lines.append(f"BOT_USERNAME: <code>{repr(BOT_USERNAME)}</code>")
+    lines.append(f"STORE_URL: <code>{repr(STORE_URL)}</code>")
+    try:
+        me = await context.bot.get_me()
+        lines.append(f"Bot: @{me.username} (id {me.id})")
+    except Exception as e:
+        lines.append(f"getMe erro: {e}")
+    if GROUP_ID:
+        try:
+            m = await context.bot.get_chat_member(GROUP_ID, tg.id)
+            lines.append(f"✅ Você no grupo: <b>{m.status}</b>")
+        except Exception as e:
+            lines.append(f"❌ Você no grupo: <code>{e}</code>")
+        try:
+            me = await context.bot.get_me()
+            m2 = await context.bot.get_chat_member(GROUP_ID, me.id)
+            lines.append(f"✅ Bot no grupo: <b>{m2.status}</b>")
+        except Exception as e:
+            lines.append(f"❌ Bot no grupo: <code>{e}</code>")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 async def on_chat_member(update, context):
     cm = update.chat_member
@@ -766,6 +795,7 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("cancelar", cmd_cancelar))
+    app.add_handler(CommandHandler("debug", cmd_debug))
     app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(InlineQueryHandler(inline_search))
     app.add_handler(CallbackQueryHandler(callback_router))
