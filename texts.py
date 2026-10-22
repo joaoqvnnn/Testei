@@ -201,8 +201,8 @@ TEXTS = {
 "🎯 Próxima meta: {meta} ({restantes} restantes)\n\n"
 "ℹ️ <b>INFO:</b> Seus indicados continuarão gerando comissão para sempre.\n"
 "A comissão pode ser alterada a qualquer momento, fique atento aos avisos.\n\n"
-"🔗 <b>Seu link de afiliado:</b>\n"
-"<a href=\"https://t.me/{bot}?start={id}\">👉 CLIQUE AQUI PARA COPIAR SEU LINK</a>"
+"🔗 Seu link de indicação:\n"
+"<code>https://t.me/{bot}?start={id}</code>"
 ),
 
 "top_ranking": (
