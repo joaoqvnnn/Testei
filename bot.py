@@ -26,12 +26,14 @@ async def txt(key, **kw):
     except (KeyError, IndexError):
         return t
 
-async def btn(key, cb=None, url=None, sw=None):
+async def btn(key, cb=None, url=None, sw=None, copy_text=None):
     label = await get_btn(key)
     if url:
         return InlineKeyboardButton(label, url=url)
     if sw:
         return InlineKeyboardButton(label, switch_inline_query_current_chat=sw)
+    if copy_text:
+        return InlineKeyboardButton(label, copy_text=copy_text)
     return InlineKeyboardButton(label, callback_data=cb or "noop")
 
 async def is_member(bot, uid):
@@ -286,7 +288,7 @@ async def handle_qty_text(update, context):
     try:
         qty = int(update.message.text.strip())
     except Exception:
-        return await update.message.reply_text("❌ Envie um número válido.")
+        return await update.message.reply_text("❌ Envie um número válido.", reply_to_message_id=update.message.message_id)
     pid = context.user_data.pop("qty_pid")
     await do_buy_multi(update, context, pid, qty, reply_to=update.message)
 
@@ -365,7 +367,13 @@ async def show_profile(update, context):
         [await btn("profile_edit", cb="prof:edit")],
         [await btn("back", cb="nav:welcome")],
     ]
-    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    # disable_web_page_preview=True remove o HTML laranja do whatsapp
+    await update.callback_query.edit_message_text(
+        text, 
+        reply_markup=InlineKeyboardMarkup(rows), 
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True
+    )
 
 async def show_history(update, context, page=0, active_only=True):
     _, u = await get_ctx_user(update)
@@ -382,7 +390,7 @@ async def show_history(update, context, page=0, active_only=True):
             rows.append([await btn("history_active", cb="prof:history:active:0")])
         rows.append([await btn("back", cb="nav:profile")])
         return await update.callback_query.edit_message_text(
-            text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+            text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
     items = await user_purchases(u[0], active_only=active_only, page=page, per_page=1)
     item = items[0]
@@ -408,7 +416,8 @@ async def show_history(update, context, page=0, active_only=True):
     else:
         rows.append([await btn("history_active", cb="prof:history:active:0")])
     rows.append([await btn("back", cb="nav:profile")])
-    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    await update.callback_query.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 async def show_gift(update, context):
     text = await get_text("gift_prompt")
@@ -419,11 +428,11 @@ async def show_gift(update, context):
 async def handle_gift_code(update, context):
     if not context.user_data.get("await_gift"):
         return
-    context.user_data.pop("await_gift")
     code = update.message.text.strip().upper()
     g = await get_gift(code)
     if not g:
-        return await update.message.reply_text(await get_text("gift_not_found"))
+        return await update.message.reply_text(await get_text("gift_not_found"), reply_to_message_id=update.message.message_id)
+    context.user_data.pop("await_gift")
     tg, u = await get_ctx_user(update)
     await use_gift(code, u[0])
     p = await get_product(g[3])
@@ -435,7 +444,7 @@ async def handle_gift_code(update, context):
             url=f"https://t.me/{BOT_USERNAME}?start=category=={p[1] if p else 0}")],
         [InlineKeyboardButton(await get_btn("activate_on"), callback_data=f"gift:on:{g[0]}")],
     ]
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 async def show_edit_data(update, context):
     _, u = await get_ctx_user(update)
@@ -458,17 +467,22 @@ async def ask_whatsapp(update, context):
 async def handle_whatsapp(update, context):
     if not context.user_data.get("await_wa"):
         return
-    context.user_data.pop("await_wa")
     tg, u = await get_ctx_user(update)
     v = update.message.text.strip().lower()
+    
     if v == "remover":
         await set_whatsapp(u[0], None)
-        return await update.message.reply_text(await get_text("edit_whatsapp_removed"))
+        context.user_data.pop("await_wa")
+        return await update.message.reply_text(await get_text("edit_whatsapp_removed"), reply_to_message_id=update.message.message_id)
+    
     digits = "".join(ch for ch in v if ch.isdigit())
     if len(digits) < 10 or len(digits) > 13:
-        return await update.message.reply_text(await get_text("edit_whatsapp_invalid"))
+        # Mantém o await_wa True para ele tentar de novo, e usa reply_to_message_id para puxar a msg
+        return await update.message.reply_text(await get_text("edit_whatsapp_invalid"), reply_to_message_id=update.message.message_id)
+    
     await set_whatsapp(u[0], digits)
-    await update.message.reply_text(await get_text("edit_whatsapp_ok"))
+    context.user_data.pop("await_wa")
+    await update.message.reply_text(await get_text("edit_whatsapp_ok"), reply_to_message_id=update.message.message_id)
 
 # ---------- RECARGA ----------
 async def show_recharge(update, context):
@@ -489,13 +503,14 @@ async def ask_recharge_value(update, context):
 async def handle_recharge_value(update, context):
     if not context.user_data.get("await_recharge"):
         return
-    context.user_data.pop("await_recharge")
     try:
         val = float(update.message.text.replace(",", ".").strip())
     except Exception:
-        return await update.message.reply_text("❌ Valor inválido.")
+        return await update.message.reply_text("❌ Valor inválido.", reply_to_message_id=update.message.message_id)
     if val < 4:
-        return await update.message.reply_text("❌ Valor mínimo: R$ 4,00")
+        return await update.message.reply_text("❌ Valor mínimo: R$ 4,00", reply_to_message_id=update.message.message_id)
+    
+    context.user_data.pop("await_recharge")
     tg, u = await get_ctx_user(update)
     await start_pix(update, context, u[0], val, "recharge", product_id=None, qty=1)
 
@@ -507,9 +522,11 @@ async def start_pix(update, context, uid, value, type_, product_id=None, qty=1, 
     code = pix["code"]
     await add_pix(ref, uid, value, type_, code, product_id, qty)
     text = await txt("pix_qr", valor=await fmt_brl(value), id_recarga=ref, codigo_pix=code)
+    
+    # Botão "Copiar Pix" usa o copy_text nativo
     rows = [
         [InlineKeyboardButton(await get_btn("pix_wait"), callback_data=f"pix:check:{ref}")],
-        [InlineKeyboardButton(await get_btn("pix_copy"), callback_data=f"pix:copy:{ref}")],
+        [InlineKeyboardButton(await get_btn("pix_copy"), copy_text=code)],
     ]
     await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
@@ -589,7 +606,7 @@ async def deep_ver_compra(update, context, pid):
             link=item[6], ref=f"REF{item[0]:06d}")
         rows = [[await btn("back", cb="nav:welcome")]]
         await update.effective_message.reply_text(
-            text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+            text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     else:
         text = await get_text("access_denied")
         rows = [[InlineKeyboardButton("🛒 Comprar agora", callback_data=f"prod:{pid}")]]
@@ -682,10 +699,6 @@ async def callback_router(update, context):
             _, _, pid, qty, faltam = data.split(":")
             uid = update.effective_user.id
             return await start_pix(update, context, uid, float(faltam), "purchase", int(pid), int(qty))
-        if data.startswith("pix:copy:"):
-            ref = data.split(":")[2]
-            p = await get_pix(ref)
-            return await q.message.reply_text(f"<code>{p[6]}</code>", parse_mode=ParseMode.HTML)
         if data.startswith("pix:check:"):
             return await q.answer("Ainda não identificado. Aguarde...", show_alert=True)
         if data.startswith("dlv:on:"):
@@ -805,7 +818,7 @@ def main():
     app.job_queue.run_repeating(job_abandoned, interval=60, first=30)
     app.job_queue.run_repeating(job_pix_check, interval=60, first=30)
 
-    # AQUI FOI A CORREÇÃO DO WEBHOOK (Trocado de BOT_TOKEN para "webhook")
+    # WEBHOOK CONFIGURADO
     if WEBHOOK_URL:
         app.run_webhook(
             listen="0.0.0.0", 
