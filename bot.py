@@ -11,10 +11,8 @@ from telegram.ext import (
 )
 from telegram.constants import ChatMemberStatus, ParseMode
 
-# Imports para o PDF
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from reportlab.lib import colors
 from reportlab.lib.units import inch
 
 from config import *
@@ -51,6 +49,18 @@ async def is_member(bot, uid):
         return m.status in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
     except Exception:
         return False
+
+async def check_member_or_block(update, context):
+    tg = update.effective_user
+    if not await is_member(context.bot, tg.id):
+        if update.callback_query:
+            await update.callback_query.answer("Você precisa entrar no grupo primeiro!", show_alert=True)
+            # Envia a mensagem de bloqueio nova
+            await send_block(update, context)
+        else:
+            await send_block(update, context)
+        return False
+    return True
 
 async def fmt_brl(v):
     return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -122,12 +132,11 @@ async def send_welcome(update, context, edit=False):
         await update.effective_message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
 
 async def cmd_start(update, context):
+    if not await check_member_or_block(update, context):
+        return
+
     tg = update.effective_user
     arg = context.args[0] if context.args else ""
-
-    if not await is_member(context.bot, tg.id):
-        context.user_data["pending_arg"] = arg
-        return await send_block(update, context)
 
     ref = None
     if arg.isdigit():
@@ -155,6 +164,7 @@ async def cmd_debug(update, context):
     lines.append(f"BOT_USERNAME: <code>{repr(BOT_USERNAME)}</code>")
     lines.append(f"STORE_URL: <code>{repr(STORE_URL)}</code>")
     lines.append(f"WEBHOOK_URL: <code>{repr(WEBHOOK_URL)}</code>")
+    lines.append(f"MP_TOKEN: <code>{'Configurado' if MERCADO_PAGO_ACCESS_TOKEN else 'Faltando!'}</code>")
     try:
         me = await context.bot.get_me()
         lines.append(f"Bot: @{me.username} (id {me.id})")
@@ -166,12 +176,6 @@ async def cmd_debug(update, context):
             lines.append(f"✅ Você no grupo: <b>{m.status}</b>")
         except Exception as e:
             lines.append(f"❌ Você no grupo: <code>{e}</code>")
-        try:
-            me = await context.bot.get_me()
-            m2 = await context.bot.get_chat_member(GROUP_ID, me.id)
-            lines.append(f"✅ Bot no grupo: <b>{m2.status}</b>")
-        except Exception as e:
-            lines.append(f"❌ Bot no grupo: <code>{e}</code>")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 async def on_chat_member(update, context):
@@ -201,6 +205,18 @@ async def on_chat_member(update, context):
             parse_mode=ParseMode.HTML)
     except Exception as e:
         log.warning(f"welcome dm failed: {e}")
+
+# ---------- ENTREGA ----------
+async def deliver_purchase(context, chat_id, tg, product, purchase_id, email, senha, link):
+    text = await txt("delivery_ok",
+        produto=product[2], nome=tg.full_name, id=tg.id,
+        valor=await fmt_brl(product[3]), email=email, senha=senha, link_acesso=link)
+    rows = [
+        [InlineKeyboardButton(await get_btn("delivery_link"), url=link)],
+        [InlineKeyboardButton(await get_btn("activate_on"), callback_data=f"dlv:on:{purchase_id}")],
+    ]
+    await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    await post_group_sale(context.bot, tg, product, product[3])
 
 # ---------- CATÁLOGO ----------
 async def show_catalog(update, context, cid, page=0, send_new=False):
@@ -276,15 +292,7 @@ async def do_buy(update, context, pid):
         await add_saldo(u[0], -price)
         await decrement_stock(pid, 1)
         await clear_abandoned(u[0], pid)
-        text = await txt("delivery_ok",
-            produto=p[2], nome=tg.full_name, id=u[0],
-            valor=await fmt_brl(price), email=email, senha=senha, link_acesso=link)
-        rows = [
-            [InlineKeyboardButton(await get_btn("delivery_link"), url=link)],
-            [InlineKeyboardButton(await get_btn("activate_on"), callback_data=f"dlv:on:{purchase_id}")],
-        ]
-        await context.bot.send_message(tg.id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
-        await post_group_sale(context.bot, tg, p, price)
+        await deliver_purchase(context, tg.id, tg, p, purchase_id, email, senha, link)
         await update.callback_query.answer("Compra aprovada!")
     else:
         faltam = round(price - saldo, 2)
@@ -409,11 +417,7 @@ async def show_profile(update, context):
         [await btn("back", cb="nav:welcome")],
     ]
     await update.callback_query.edit_message_text(
-        text, 
-        reply_markup=InlineKeyboardMarkup(rows), 
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True
-    )
+        text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 async def show_history(update, context, page=0, active_only=True):
     _, u = await get_ctx_user(update)
@@ -564,12 +568,16 @@ async def handle_recharge_value(update, context):
 
 async def start_pix(update, context, uid, value, type_, product_id=None, qty=1, chat_id=None):
     chat_id = chat_id or update.effective_chat.id
-    await context.bot.send_message(chat_id, await get_text("pix_generating"))
+    msg_gen = await context.bot.send_message(chat_id, await get_text("pix_generating"))
     
-    # DELAY DE 3 SEGUNDOS AQUI
     await asyncio.sleep(3) 
     
-    pix = await payments.create_pix(uid, value)
+    try:
+        pix = await payments.create_pix(uid, value)
+    except Exception as e:
+        await msg_gen.edit_text(f"❌ Erro ao gerar PIX: {str(e)}")
+        return
+
     ref = pix["ref"]
     code = pix["code"]
     await add_pix(ref, uid, value, type_, code, product_id, qty)
@@ -687,11 +695,13 @@ async def inline_search(update, context):
 
 # ---------- CALLBACK ROUTER ----------
 async def callback_router(update, context):
+    if not await check_member_or_block(update, context):
+        return
+
     q = update.callback_query
     data = q.data or ""
     await q.answer()
     
-    # LIMPA O ESTADO DE INPUT A CADA CLIQUE DE BOTÃO
     context.user_data.pop("await_gift", None)
     context.user_data.pop("await_wa", None)
     context.user_data.pop("await_recharge", None)
@@ -820,10 +830,13 @@ async def callback_router(update, context):
     except Exception as e:
         log.exception(f"callback error: {e}")
 
-# ---------- TEXT HANDLER (reply inputs) ----------
+# ---------- TEXT HANDLER ----------
 async def text_router(update, context):
     if not update.message:
         return
+    if not await check_member_or_block(update, context):
+        return
+        
     if context.user_data.get("await_gift"):
         return await handle_gift_code(update, context)
     if context.user_data.get("await_wa"):
@@ -841,6 +854,67 @@ async def cmd_cancelar(update, context):
     await update.message.reply_text("Cancelado.")
 
 # ---------- JOBS ----------
+async def job_verify_payments(context):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("SELECT ref, user_id, value, type, product_id, qty FROM pix WHERE status='pending'")
+        pendentes = await cur.fetchall()
+
+    for ref, uid, valor, tipo, pid, qty in pendentes:
+        status = await payments.check_payment_status(ref)
+        if status == "approved":
+            await set_pix_status(ref, "approved")
+
+            if tipo == "recharge":
+                await add_saldo(uid, valor)
+                await context.bot.send_message(
+                    uid,
+                    f"✅ <b>Pagamento confirmado!</b>\n\n💰 Valor: R$ {await fmt_brl(valor)}\nSeu saldo foi creditado.",
+                    parse_mode=ParseMode.HTML
+                )
+            elif tipo == "purchase":
+                # Finaliza a compra que estava pendente
+                u = await get_user(uid)
+                p = await get_product(pid)
+                if not p:
+                    continue
+                
+                # Adiciona saldo (que será debitado na hora)
+                await add_saldo(uid, valor)
+                
+                if qty == 1:
+                    email = f"user{uid}@lari.com"
+                    senha = uuid.uuid4().hex[:10]
+                    link = f"https://ativar.lari/{uuid.uuid4().hex[:8]}"
+                    purchase_id = await add_purchase(uid, pid, p[3], email, senha, link)
+                    await add_saldo(uid, -p[3])
+                    await decrement_stock(pid, 1)
+                    await clear_abandoned(uid, pid)
+                    
+                    tg_fake = type('obj', (object,), {'id': uid, 'full_name': u[1]})
+                    await deliver_purchase(context, uid, tg_fake, p, purchase_id, email, senha, link)
+                else:
+                    # Compra Multipla
+                    price = p[3] * qty
+                    purchases = []
+                    for _ in range(qty):
+                        email = f"u{uid}_{uuid.uuid4().hex[:4]}@lari.com"
+                        senha = uuid.uuid4().hex[:10]
+                        link = f"https://ativar.lari/{uuid.uuid4().hex[:8]}"
+                        i = await add_purchase(uid, pid, p[3], email, senha, link)
+                        purchases.append({"id": i, "email": email, "senha": senha, "link": link})
+                    await add_saldo(uid, -price)
+                    await decrement_stock(pid, qty)
+                    await clear_abandoned(uid, pid)
+                    
+                    text = await txt("delivery_ok",
+                        produto=p[2], nome=u[1], id=uid, valor=await fmt_brl(price),
+                        email=purchases[0]["email"], senha=purchases[0]["senha"], link_acesso=purchases[0]["link"])
+                    rows = [[InlineKeyboardButton("🔗 Link 1", url=purchases[0]["link"])]]
+                    await context.bot.send_message(uid, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+                    
+        elif status in ("rejected", "cancelled", "expired"):
+            await set_pix_status(ref, status)
+
 async def job_abandoned(context):
     items = await abandoned_to_notify(minutes=15)
     for a in items:
@@ -868,24 +942,6 @@ async def job_abandoned(context):
             log.warning(f"abandoned notify: {e}")
         await mark_abandoned_notified(a[0])
 
-async def job_pix_check(context):
-    for p in await expired_pix():
-        await set_pix_status(p[1], "expired")
-        try:
-            await context.bot.send_message(
-                p[2], await txt("pix_expired", referencia=p[1], valor=await fmt_brl(p[4])),
-                parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
-    for p in await pending_pix_older_than(5):
-        try:
-            await context.bot.send_message(
-                p[2], await txt("pix_pending",
-                    valor=await fmt_brl(p[4]), id_recarga=p[1], minutos=5),
-                parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
-
 # ---------- BOOTSTRAP ----------
 async def post_init(app):
     await init_db()
@@ -901,8 +957,9 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
 
+    # Job de pagamentos (a cada 30s)
+    app.job_queue.run_repeating(job_verify_payments, interval=30, first=10)
     app.job_queue.run_repeating(job_abandoned, interval=60, first=30)
-    app.job_queue.run_repeating(job_pix_check, interval=60, first=30)
 
     if WEBHOOK_URL:
         app.run_webhook(
