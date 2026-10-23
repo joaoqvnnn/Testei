@@ -55,7 +55,6 @@ async def check_member_or_block(update, context):
     if not await is_member(context.bot, tg.id):
         if update.callback_query:
             await update.callback_query.answer("Você precisa entrar no grupo primeiro!", show_alert=True)
-            # Envia a mensagem de bloqueio nova
             await send_block(update, context)
         else:
             await send_block(update, context)
@@ -719,9 +718,14 @@ async def callback_router(update, context):
             rows = [[InlineKeyboardButton(f"{c[2]} {c[1]}", callback_data=f"nav:cat:{c[0]}:0")] for c in cats]
             rows.append([await btn("back", cb="nav:welcome")])
             return await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+        
+        # CORREÇÃO DO ERRO "too many values to unpack"
         if data.startswith("nav:cat:"):
-            _, cid, page = data.split(":")
-            return await show_category_products(update, context, int(cid), int(page))
+            parts = data.split(":")
+            cid = int(parts[2])
+            page = int(parts[3])
+            return await show_category_products(update, context, cid, page)
+            
         if data.startswith("prod:"):
             pid = int(data.split(":")[1])
             return await show_product(update, context, pid)
@@ -872,13 +876,11 @@ async def job_verify_payments(context):
                     parse_mode=ParseMode.HTML
                 )
             elif tipo == "purchase":
-                # Finaliza a compra que estava pendente
                 u = await get_user(uid)
                 p = await get_product(pid)
                 if not p:
                     continue
                 
-                # Adiciona saldo (que será debitado na hora)
                 await add_saldo(uid, valor)
                 
                 if qty == 1:
@@ -893,7 +895,6 @@ async def job_verify_payments(context):
                     tg_fake = type('obj', (object,), {'id': uid, 'full_name': u[1]})
                     await deliver_purchase(context, uid, tg_fake, p, purchase_id, email, senha, link)
                 else:
-                    # Compra Multipla
                     price = p[3] * qty
                     purchases = []
                     for _ in range(qty):
@@ -957,7 +958,6 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
 
-    # Job de pagamentos (a cada 30s)
     app.job_queue.run_repeating(job_verify_payments, interval=30, first=10)
     app.job_queue.run_repeating(job_abandoned, interval=60, first=30)
 
